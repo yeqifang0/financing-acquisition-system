@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8001"
+    environment:
+      - QCC_APP_KEY=f4beb93c988a4d729197331c7772c606
+      - QCC_SECRET_KEY=D850C45ED7C596C2162E7082D5C1E900
+      - QICHACHA_USE_MOCK=0
+    volumes:
+      - backend-data:/app/data
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - NEXT_PUBLIC_API_BASE=/api
+
+volumes:
+  backend-data:
