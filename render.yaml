@@ -1,0 +1,35 @@
+# Render Blueprint: 一键部署前后端全栈
+# 使用步骤:
+#   1. 登录 https://render.com → New → Blueprint
+#   2. 选择本仓库 (yeqifang0/financing-acquisition-system)
+#   3. 点击 Apply，等待两个服务构建部署
+#   4. 部署完成后，在 financing-frontend 服务的 Environment 页面
+#      手动添加环境变量:
+#        NEXT_PUBLIC_API_BASE = https://financing-backend.onrender.com/api
+#      (等后端 URL 出来后再设这个，然后手动 Redeploy)
+#   5. 访问 https://financing-frontend.onrender.com 即可使用
+
+services:
+  - name: financing-backend
+    type: web
+    region: singapore
+    plan: free
+    docker:
+      dockerfilePath: backend/Dockerfile
+    healthCheckPath: /api/health
+    env:
+      - key: JINGHAI_APP_ID
+        value: jh_750936_40994239
+      - key: JINGHAI_API_KEY
+        value: jhkey_9a875c132fc07f6acc47c25a9ad0aafaf340317e4bc10293
+
+  - name: financing-frontend
+    type: web
+    region: singapore
+    plan: free
+    docker:
+      dockerfilePath: frontend/Dockerfile
+    env:
+      # ⚠️ 部署后手动改为: https://financing-backend.onrender.com/api
+      - key: NEXT_PUBLIC_API_BASE
+        value: /api
