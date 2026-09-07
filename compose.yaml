@@ -1,0 +1,17 @@
+name: financing-acquisition-system
+
+# 启动后端（FastAPI :8001）
+backend:
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8001
+  cwd: backend
+  env:
+    DATABASE_URL: sqlite:////tmp/acquisition_data/acquisition.db
+    JINGHAI_APP_ID: jh_750936_40994239
+    JINGHAI_API_KEY: jhkey_9a875c132fc07f6acc47c25a9ad0aafaf340317e4bc10293
+
+# 启动前端（Next.js :3000）
+frontend:
+  command: npm run dev -- -p 3000
+  cwd: frontend
+  env:
+    NEXT_PUBLIC_API_BASE: /api

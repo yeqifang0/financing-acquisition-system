@@ -46,11 +46,26 @@ const SUGGESTIONS = [
   "采集深圳新能源企业线索30条",
 ];
 
+// 深拷贝 Msg，确保 React 能检测到深层变化
+function cloneMsg(m: Msg): Msg {
+  return {
+    ...m,
+    params: m.params ? { ...m.params } : undefined,
+    steps: m.steps ? m.steps.map((s) => ({ ...s })) : undefined,
+    logs: m.logs ? [...m.logs] : undefined,
+    summary: m.summary
+      ? { ...m.summary, top10: m.summary.top10 ? [...m.summary.top10] : [] }
+      : undefined,
+  };
+}
+
 export default function ChatPanel() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 用 ref 累积 SSE 流中的草稿，避免 React state 闭包问题
+  const draftRef = useRef<Msg>({ role: "assistant", loading: true, logs: [] });
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -63,8 +78,9 @@ export default function ChatPanel() {
     setInput("");
     setBusy(true);
     const userMsg: Msg = { role: "user", text };
-    const assistantMsg: Msg = { role: "assistant", loading: true, logs: [] };
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    // 初始化草稿 ref
+    draftRef.current = { role: "assistant", loading: true, logs: [] };
+    setMessages((prev) => [...prev, userMsg, cloneMsg(draftRef.current)]);
     scrollToBottom();
 
     try {
@@ -73,39 +89,65 @@ export default function ChatPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const reader = res.body?.getReader();
-      if (!reader) return;
+      if (!reader) throw new Error("无法读取响应流");
       const decoder = new TextDecoder();
       let buffer = "";
 
+      // 正确的 SSE 解析器：按 \n\n 分割完整事件，每个事件由多行组成
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        const append = value ? decoder.decode(value, { stream: true }) : "";
+        buffer += append;
 
-        let eventType = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-            handleEvent(eventType, data, assistantMsg);
+        // split by double newline = SSE event separator
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          let eventType = "";
+          let dataStr = "";
+          for (const line of rawEvent.split("\n")) {
+            const trimmed = line.replace(/\r$/, "");
+            if (trimmed.startsWith("event:")) {
+              eventType = trimmed.slice(6).trim();
+            } else if (trimmed.startsWith("data:")) {
+              dataStr += (dataStr ? "\n" : "") + trimmed.slice(5).trim();
+            }
+          }
+          if (dataStr) {
+            try {
+              const data = JSON.parse(dataStr);
+              handleEvent(eventType, data);
+            } catch (parseErr) {
+              console.warn("SSE parse error:", parseErr, dataStr.slice(0, 100));
+            }
           }
         }
+
+        if (done) break;
+
+        // 每收到完整事件后，以不可变方式更新 React state
         setMessages((prev) => {
           const next = [...prev];
-          next[next.length - 1] = { ...assistantMsg, loading: false };
+          next[next.length - 1] = cloneMsg(draftRef.current);
           return next;
         });
         scrollToBottom();
       }
-    } catch (e: any) {
-      assistantMsg.error = `请求失败: ${e.message}`;
+
+      // 流结束后，最终更新（确保 loading=false）
       setMessages((prev) => {
         const next = [...prev];
-        next[next.length - 1] = { ...assistantMsg, loading: false, error: assistantMsg.error };
+        next[next.length - 1] = { ...cloneMsg(draftRef.current), loading: false };
+        return next;
+      });
+    } catch (e: any) {
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { ...cloneMsg(draftRef.current), loading: false, error: `请求失败: ${e.message || e}` };
         return next;
       });
     } finally {
@@ -113,22 +155,25 @@ export default function ChatPanel() {
     }
   };
 
-  const handleEvent = (type: string, data: any, msg: Msg) => {
+  const handleEvent = (type: string, data: any) => {
+    const msg = draftRef.current;
     switch (type) {
       case "text":
         msg.text = (msg.text || "") + (msg.text ? "\n" : "") + data.text;
         break;
       case "params":
-        msg.params = data;
+        msg.params = { ...data };
         break;
       case "steps":
-        msg.steps = data.steps;
+        msg.steps = data.steps.map((s: Step) => ({ ...s }));
         break;
       case "step":
         if (msg.steps) {
           const idx = data.index - 1;
           if (msg.steps[idx]) {
-            msg.steps[idx] = { ...msg.steps[idx], status: data.status, result: data.result, error: data.error };
+            msg.steps = msg.steps.map((s: Step, i: number) =>
+              i === idx ? { ...s, status: data.status, result: data.result, error: data.error } : s
+            );
           }
         }
         break;
@@ -136,13 +181,13 @@ export default function ChatPanel() {
         msg.logs = [...(msg.logs || []), data.text];
         break;
       case "card":
-        msg.summary = data.summary;
+        msg.summary = { ...data.summary, top10: data.summary.top10 ? [...data.summary.top10] : undefined };
         break;
       case "error":
         msg.error = data.message;
         break;
       case "done":
-        msg.summary = data.summary;
+        msg.summary = { ...data.summary, top10: data.summary.top10 ? [...data.summary.top10] : undefined };
         break;
     }
   };
